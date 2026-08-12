@@ -3,6 +3,7 @@ import YouTubePlayer from './YouTubePlayer'
 import AnswerModal from './AnswerModal'
 import BidPanel from './BidPanel'
 import GoldenMedleyTimer from './GoldenMedleyTimer'
+import { beep } from '../utils/audio'
 
 const DEFAULT_TEAMS = [
   { id: 1, name: 'Team 1', score: 0 },
@@ -44,6 +45,7 @@ export default function HostScreen(){
     if(buzzLocked) return
     setCurrentBuzzer(teamId)
     setBuzzLocked(true)
+    beep(1000, 0.12)
     if(playerRef.current) playerRef.current.pause()
     // open answer modal for host to collect answer
     setAnswerModalOpen(true)
@@ -59,12 +61,15 @@ export default function HostScreen(){
 
     if(matched && correct){
       setTeams(ts => ts.map(t => t.id===currentBuzzer ? {...t, score: t.score + points} : t))
+      beep(1200, 0.16)
     } else if(!matched && correct){
       // host marked correct even though fuzzy didn't match: still award
       setTeams(ts => ts.map(t => t.id===currentBuzzer ? {...t, score: t.score + points} : t))
+      beep(1200, 0.16)
     } else {
       // wrong answer: penalize
       setTeams(ts => ts.map(t => t.id===currentBuzzer ? {...t, score: t.score - points} : t))
+      beep(300, 0.18)
     }
 
     // close modal and resume
@@ -78,6 +83,7 @@ export default function HostScreen(){
   function acceptAnswerQuick(points=10){
     if(!currentBuzzer) return
     setTeams(ts => ts.map(t => t.id===currentBuzzer ? {...t, score: t.score + points} : t))
+    beep(1200, 0.16)
     setCurrentBuzzer(null)
     setBuzzLocked(false)
     if(playerRef.current) playerRef.current.play()
@@ -85,6 +91,7 @@ export default function HostScreen(){
   function rejectAnswerQuick(points=10){
     if(!currentBuzzer) return
     setTeams(ts => ts.map(t => t.id===currentBuzzer ? {...t, score: t.score - points} : t))
+    beep(300, 0.18)
     setCurrentBuzzer(null)
     setBuzzLocked(false)
     if(playerRef.current) playerRef.current.play()
@@ -107,6 +114,7 @@ export default function HostScreen(){
     const bidderIds = teams.map(t => t.id)
     setBidState({ currentBid: 7, highestBidTeamId: null, biddingTurnIndex: 0, bidders: bidderIds })
     setPhase(2)
+    beep(800, 0.12)
   }
 
   function teamPlaceBid(teamId){
@@ -116,6 +124,7 @@ export default function HostScreen(){
     if(turnTeamId !== teamId) return
     if(bidState.currentBid <= 1) return
     setBidState(bs => ({ ...bs, currentBid: bs.currentBid - 1, highestBidTeamId: teamId, biddingTurnIndex: bs.biddingTurnIndex + 1 }))
+    beep(900, 0.08)
   }
 
   function endBiddingAndPlay(){
@@ -137,6 +146,7 @@ export default function HostScreen(){
     setCurrentBuzzer(bidState.highestBidTeamId)
     // clear bid state
     setBidState(null)
+    beep(1100, 0.12)
   }
 
   // Phase 3: Golden Medley
@@ -145,6 +155,7 @@ export default function HostScreen(){
     const leader = [...teams].sort((a,b)=>b.score-a.score)[0]
     setGoldenState({ teamId: leader.id, secondsLeft: 30, currentSongIdx: 0, correctCount: 0, expectedMax: 7 })
     setPhase(3)
+    beep(1000, 0.12)
   }
 
   function goldenAdvanceSong(calledCorrect=false){
@@ -153,6 +164,8 @@ export default function HostScreen(){
     const newCorrect = calledCorrect ? goldenState.correctCount + 1 : goldenState.correctCount
     setGoldenState(gs => ({ ...gs, currentSongIdx: nextIdx, correctCount: newCorrect }))
     setCurrentIndex(nextIdx)
+    if(calledCorrect) beep(1200, 0.12)
+    else beep(300, 0.12)
   }
 
   // Simple fuzzy check
@@ -208,65 +221,65 @@ export default function HostScreen(){
   const currentSong = songs[currentIndex]
 
   return (
-    <div style={{padding:20,fontFamily:'sans-serif'}}>
-      <h1>TunedUp — Host Screen (MVP)</h1>
-      <div style={{display:'flex',gap:20}}>
+    <div style={{padding:28,fontFamily:'sans-serif'}}>
+      <h1 style={{fontSize:42}}>TunedUp — Host Screen (MVP)</h1>
+      <div style={{display:'flex',gap:24}}>
         <div style={{flex:1}}>
-          <h2>Scoreboard</h2>
-          <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+          <h2 style={{fontSize:28}}>Scoreboard</h2>
+          <div style={{display:'flex',gap:16,flexWrap:'wrap'}}>
             {teams.map(t=> (
-              <div key={t.id} style={{border:'1px solid #ccc',padding:12,minWidth:160,background: currentBuzzer===t.id? '#fffae6':'white',borderRadius:8}}>
+              <div key={t.id} style={{border:'1px solid #ccc',padding:16,minWidth:240,background: currentBuzzer===t.id? '#fffae6':'white',borderRadius:10}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                  <input value={t.name} onChange={e=>updateTeamName(t.id,e.target.value)} style={{fontSize:18,fontWeight:'bold',border:0,background:'transparent'}} />
-                  <div style={{fontSize:24}}>{t.score}</div>
+                  <input value={t.name} onChange={e=>updateTeamName(t.id,e.target.value)} style={{fontSize:20,fontWeight:'bold',border:0,background:'transparent'}} />
+                  <div style={{fontSize:36,fontWeight:'700'}}>{t.score}</div>
                 </div>
-                <div style={{marginTop:8,display:'flex',gap:8}}>
-                  <button onClick={()=>onBuzz(t.id)} style={{padding:'12px 18px',fontSize:16}}>Buzz</button>
-                  <button onClick={()=>{ setTeams(ts=>ts.map(x=>x.id===t.id?{...x,score:x.score+5}:x))}}>+5</button>
-                  <button onClick={()=>{ setTeams(ts=>ts.map(x=>x.id===t.id?{...x,score:x.score-5}:x))}}>-5</button>
+                <div style={{marginTop:12,display:'flex',gap:12}}>
+                  <button onClick={()=>onBuzz(t.id)} style={{padding:'18px 24px',fontSize:20,borderRadius:8,flex:1}}>Buzz</button>
+                  <button onClick={()=>{ setTeams(ts=>ts.map(x=>x.id===t.id?{...x,score:x.score+5}:x))}} style={{padding:'10px 12px'}}>+5</button>
+                  <button onClick={()=>{ setTeams(ts=>ts.map(x=>x.id===t.id?{...x,score:x.score-5}:x))}} style={{padding:'10px 12px'}}>-5</button>
                 </div>
               </div>
             ))}
           </div>
 
           <div style={{marginTop:20}}>
-            <div style={{display:'flex',gap:8}}>
-              <button onClick={()=>setPhase(1)}>Phase 1: Standard</button>
-              <button onClick={startBidding}>Phase 2: Bid-A-Note (start)</button>
-              <button onClick={startGoldenMedley}>Phase 3: Golden Medley</button>
-              <label style={{marginLeft:12}}><input type="checkbox" checked={strictMode} onChange={e=>setStrictMode(e.target.checked)} /> Strict (title+artist)</label>
+            <div style={{display:'flex',gap:10,alignItems:'center'}}>
+              <button onClick={()=>setPhase(1)} style={{padding:'10px 14px'}}>Phase 1: Standard</button>
+              <button onClick={startBidding} style={{padding:'10px 14px'}}>Phase 2: Bid-A-Note (start)</button>
+              <button onClick={startGoldenMedley} style={{padding:'10px 14px'}}>Phase 3: Golden Medley</button>
+              <label style={{marginLeft:12,fontSize:16}}><input type="checkbox" checked={strictMode} onChange={e=>setStrictMode(e.target.checked)} /> Strict (title+artist)</label>
             </div>
 
-            <div style={{marginTop:12}}>
-              <button onClick={()=>acceptAnswerQuick(determinePointsForCurrent())}>Accept Correct (+pts)</button>
-              <button onClick={()=>rejectAnswerQuick(determinePointsForCurrent())} style={{marginLeft:8}}>Reject / Wrong (-pts)</button>
-              <button onClick={nextSong} style={{marginLeft:8}}>Next Song</button>
-              <button onClick={saveSession} style={{marginLeft:8}}>Save Session</button>
-              <button onClick={loadSession} style={{marginLeft:8}}>Load Session</button>
+            <div style={{marginTop:14}}>
+              <button onClick={()=>acceptAnswerQuick(determinePointsForCurrent())} style={{padding:'10px 14px'}}>Accept Correct (+pts)</button>
+              <button onClick={()=>rejectAnswerQuick(determinePointsForCurrent())} style={{marginLeft:8,padding:'10px 14px'}}>Reject / Wrong (-pts)</button>
+              <button onClick={nextSong} style={{marginLeft:8,padding:'10px 14px'}}>Next Song</button>
+              <button onClick={saveSession} style={{marginLeft:8,padding:'10px 14px'}}>Save Session</button>
+              <button onClick={loadSession} style={{marginLeft:8,padding:'10px 14px'}}>Load Session</button>
             </div>
           </div>
 
           {bidState && (
-            <div style={{marginTop:16}}>
+            <div style={{marginTop:18}}>
               <BidPanel bidState={bidState} teams={teams} onTeamBid={teamPlaceBid} onEndBidding={endBiddingAndPlay} />
             </div>
           )}
 
         </div>
         <div style={{flex:1}}>
-          <h2>Player</h2>
+          <h2 style={{fontSize:28}}>Player</h2>
           {currentSong ? (
             <div>
-              <div style={{marginBottom:8}}><strong>{currentSong.title}</strong> — {currentSong.artist}</div>
+              <div style={{marginBottom:12,fontSize:20}}><strong>{currentSong.title}</strong> — {currentSong.artist}</div>
               <YouTubePlayer ref={playerRef} videoId={currentSong.youtubeId} start={currentSong.startSec} end={currentSong.endSec} />
             </div>
           ) : (
-            <div>No song loaded</div>
+            <div style={{fontSize:18}}>No song loaded</div>
           )}
 
           {phase===3 && goldenState && (
-            <div style={{marginTop:12}}>
-              <h3>Golden Medley — Team: {teams.find(t=>t.id===goldenState.teamId)?.name}</h3>
+            <div style={{marginTop:18}}>
+              <h3 style={{fontSize:20}}>Golden Medley — Team: {teams.find(t=>t.id===goldenState.teamId)?.name}</h3>
               <GoldenMedleyTimer state={goldenState} onTick={(s)=>setGoldenState(s)} onAdvance={(correct)=>goldenAdvanceSong(correct)} />
             </div>
           )}

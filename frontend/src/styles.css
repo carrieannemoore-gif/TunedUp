@@ -1,5 +1,11 @@
-/* improved styles for buzzers and layout */
+/* improved styles for buzzer app tuned for TV display */
 body { margin:0; }
 button{ cursor:pointer }
 
-input { font-size:16px }
+input { font-size:18px }
+
+/* make buttons larger and more touch-friendly */
+button { border-radius:8px; }
+
+/* scoreboard layout tweaks */
+

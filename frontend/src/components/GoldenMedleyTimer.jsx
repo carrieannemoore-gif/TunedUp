@@ -17,11 +17,11 @@ export default function GoldenMedleyTimer({ state, onTick, onAdvance }){
   }, [])
 
   return (
-    <div style={{border:'1px solid #ddd',padding:12,borderRadius:8}}>
-      <div style={{fontSize:24,fontWeight:'bold'}}>Time left: {seconds}s</div>
-      <div style={{marginTop:8}}>
-        <button onClick={()=>onAdvance(true)}>Correct (advance)</button>
-        <button onClick={()=>onAdvance(false)} style={{marginLeft:8}}>Wrong (advance)</button>
+    <div style={{border:'1px solid #ddd',padding:16,borderRadius:8}}>
+      <div style={{fontSize:28,fontWeight:'bold'}}>Time left: {seconds}s</div>
+      <div style={{marginTop:12}}>
+        <button onClick={()=>onAdvance(true)} style={{padding:'10px 14px',fontSize:16}}>Correct (advance)</button>
+        <button onClick={()=>onAdvance(false)} style={{marginLeft:8,padding:'10px 14px',fontSize:16}}>Wrong (advance)</button>
       </div>
     </div>
   )
