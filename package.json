@@ -1,0 +1,8 @@
+{
+  "name": "tunedup-monorepo",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ]
+}

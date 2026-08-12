@@ -1,0 +1,26 @@
+[
+  {
+    "id": "s1",
+    "title": "Billie Jean",
+    "artist": "Michael Jackson",
+    "youtubeId": "Zi_XLOBDo_Y",
+    "startSec": 0,
+    "endSec": 10
+  },
+  {
+    "id": "s2",
+    "title": "Rolling in the Deep",
+    "artist": "Adele",
+    "youtubeId": "rYEDA3JcQqw",
+    "startSec": 10,
+    "endSec": 20
+  },
+  {
+    "id": "s3",
+    "title": "Shape of You",
+    "artist": "Ed Sheeran",
+    "youtubeId": "JGwWNGJdvx8",
+    "startSec": 5,
+    "endSec": 15
+  }
+]
