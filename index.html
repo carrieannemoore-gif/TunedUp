@@ -1,0 +1,358 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TunedUp — Playable Host (single file)</title>
+  <style>
+    :root{ --bg:#0b0b0b; --card:#fff; --accent:#ffcc00 }
+    body{ margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; background:var(--bg); color:#fff }
+    .container{ padding:20px; display:flex; gap:20px }
+    .left,.right{ background:rgba(255,255,255,0.06); border-radius:12px; padding:18px }
+    .left{ flex:1; min-width:420px }
+    .right{ flex:1; min-width:420px }
+    h1{ margin:0 0 12px 0; font-size:28px }
+    h2{ margin:6px 0 12px 0; font-size:20px }
+    .scoreboard{ display:flex; flex-wrap:wrap; gap:12px }
+    .team{ background:#111; padding:12px; border-radius:10px; min-width:200px; flex:1 }
+    .team .row{ display:flex; justify-content:space-between; align-items:center }
+    .team input{ background:transparent; border:0; color:var(--card); font-size:18px }
+    .team .score{ font-size:36px; font-weight:700 }
+    .buzzBtn{ margin-top:10px; padding:18px; font-size:20px; border-radius:10px; width:100%; background:var(--accent); color:#111; border:0 }
+    .controls{ margin-top:14px; display:flex; gap:8px; flex-wrap:wrap }
+    button{ cursor:pointer }
+    .player{ text-align:center }
+    .songTitle{ font-size:20px; margin-bottom:8px }
+    .big{ font-size:24px }
+    .modal{ position:fixed; left:0; top:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.6) }
+    .modalCard{ background:#fff; color:#000; padding:18px; border-radius:10px; width:720px; max-width:95% }
+    .bidPanel, .goldenPanel{ margin-top:12px }
+    .bidders button{ padding:12px 14px; font-size:16px }
+    .footer{ margin-top:12px; font-size:13px; color:#ddd }
+  </style>
+</head>
+<body>
+  <div style="padding:12px; display:flex; justify-content:space-between; align-items:center;">
+    <div>
+      <h1 style="color:var(--accent);">TunedUp — Ready to Play</h1>
+      <div style="color:#bbb">Open this file on the host device (TV/tablet). Click anywhere to enable audio if needed.</div>
+    </div>
+    <div>
+      <button id="fullscreenBtn">Full screen</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="left">
+      <h2>Scoreboard</h2>
+      <div class="scoreboard" id="scoreboard"></div>
+
+      <div class="controls">
+        <button id="phase1Btn">Phase 1: Standard</button>
+        <button id="phase2Btn">Phase 2: Bid-A-Note (start)</button>
+        <button id="phase3Btn">Phase 3: Golden Medley</button>
+        <label style="align-items:center;display:flex;gap:6px"><input id="strictChk" type="checkbox" checked /> Strict (title+artist)</label>
+      </div>
+
+      <div class="controls" style="margin-top:12px">
+        <button id="acceptBtn">Accept (+pts)</button>
+        <button id="rejectBtn">Reject (-pts)</button>
+        <button id="nextBtn">Next Song</button>
+      </div>
+
+      <div class="bidPanel" id="bidPanel" style="display:none">
+        <div style="color:#ddd">Current bid (seconds): <span id="currentBid">7</span></div>
+        <div class="bidders" id="bidders"></div>
+        <div style="margin-top:8px"><button id="endBidBtn">End Bidding / Play</button></div>
+      </div>
+
+      <div class="goldenPanel" id="goldenPanel" style="display:none">
+        <div style="color:#ddd">Golden Medley — Team: <span id="goldenTeamName"></span></div>
+        <div style="font-size:28px; font-weight:700" id="goldenTimer">30s</div>
+        <div style="margin-top:8px"><button id="goldenCorrect">Correct (advance)</button> <button id="goldenWrong">Wrong (advance)</button></div>
+      </div>
+
+      <div class="footer">Edit sample songs and teams by adjusting the array at the top of this file.</div>
+    </div>
+
+    <div class="right">
+      <h2>Player</h2>
+      <div class="player">
+        <div class="songTitle" id="songTitle">(no song loaded)</div>
+        <div id="player"></div>
+        <div style="margin-top:12px;color:#ccc">Use large Buzz buttons on the left to answer.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalRoot"></div>
+
+  <script>
+    // === CONFIG: edit this list to change songs ===
+    const songs = [
+      { id: 's1', title: 'Billie Jean', artist: 'Michael Jackson', youtubeId: 'Zi_XLOBDo_Y', startSec: 0, endSec: 10 },
+      { id: 's2', title: 'Rolling in the Deep', artist: 'Adele', youtubeId: 'rYEDA3JcQqw', startSec: 10, endSec: 20 },
+      { id: 's3', title: 'Shape of You', artist: 'Ed Sheeran', youtubeId: 'JGwWNGJdvx8', startSec: 5, endSec: 15 },
+      { id: 's4', title: 'I Want It That Way', artist: 'Backstreet Boys', youtubeId: '4fndeDfaWCg', startSec: 0, endSec: 10 },
+      { id: 's5', title: 'Sweet Child O\' Mine', artist: 'Guns N\' Roses', youtubeId: '1w7OgIMMRc4', startSec: 5, endSec: 14 }
+    ]
+
+    // default teams: up to 6
+    const teams = [ { id:1, name:'Team 1', score:0 }, { id:2, name:'Team 2', score:0 }, { id:3, name:'Team 3', score:0 } ]
+
+    // === state ===
+    let currentIndex = 0
+    let currentBuzzer = null
+    let buzzLocked = false
+    let phase = 1 // 1,2,3
+    let bidState = null // { currentBid, highestBidTeamId, bidders, turnIndex }
+    let goldenState = null // { teamId, secondsLeft, currentSongIdx, correctCount }
+
+    // Advanced WebAudio sound effects (synthesized)
+    function playSound(kind){
+      try{
+        const AudioCtx = window.AudioContext || window.webkitAudioContext
+        const ctx = new AudioCtx()
+        const now = ctx.currentTime
+        if(kind === 'buzz'){
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type = 'square'; o.frequency.value = 120; o.connect(g); g.connect(ctx.destination);
+          g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.9, now+0.01);
+          o.start(now);
+          g.gain.exponentialRampToValueAtTime(0.0001, now+0.18);
+          setTimeout(()=>{ try{ o.stop(); ctx.close() }catch(e){} }, 220)
+          return
+        }
+        if(kind === 'correct'){
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type = 'sine'; o.frequency.setValueAtTime(600, now); o.frequency.exponentialRampToValueAtTime(1400, now+0.14);
+          o.connect(g); g.connect(ctx.destination);
+          g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.9, now+0.01);
+          o.start(now);
+          g.gain.exponentialRampToValueAtTime(0.0001, now+0.18);
+          setTimeout(()=>{ try{ o.stop(); ctx.close() }catch(e){} }, 200)
+          return
+        }
+        if(kind === 'wrong'){
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type = 'sine'; o.frequency.value = 120; o.connect(g); g.connect(ctx.destination);
+          g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.9, now+0.01);
+          o.start(now);
+          g.gain.exponentialRampToValueAtTime(0.0001, now+0.28);
+          setTimeout(()=>{ try{ o.stop(); ctx.close() }catch(e){} }, 320)
+          return
+        }
+        if(kind === 'bid'){
+          // short two-tone blip
+          const o1 = ctx.createOscillator(); const o2 = ctx.createOscillator(); const g = ctx.createGain();
+          o1.type='sine'; o2.type='sine'; o1.frequency.value=800; o2.frequency.value=1000;
+          const merger = ctx.createGain(); o1.connect(merger); o2.connect(merger); merger.connect(g); g.connect(ctx.destination);
+          g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.6, now+0.01);
+          o1.start(now); o2.start(now+0.04);
+          setTimeout(()=>{ try{ g.gain.exponentialRampToValueAtTime(0.0001, now+0.12); o1.stop(); o2.stop(); ctx.close() }catch(e){} }, 180)
+          return
+        }
+        if(kind === 'start'){
+          const o = ctx.createOscillator(); const g = ctx.createGain();
+          o.type='sine'; o.frequency.value=1000; o.connect(g); g.connect(ctx.destination);
+          g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.8, now+0.01);
+          o.start(now); g.gain.exponentialRampToValueAtTime(0.0001, now+0.12);
+          setTimeout(()=>{ try{ o.stop(); ctx.close() }catch(e){} }, 160)
+          return
+        }
+      }catch(e){ console.warn('playSound failed', e) }
+    }
+
+    // build scoreboard UI
+    const scoreboardEl = document.getElementById('scoreboard')
+    function renderScoreboard(){
+      scoreboardEl.innerHTML = ''
+      teams.forEach(t=>{
+        const div = document.createElement('div')
+        div.className = 'team'
+        div.innerHTML = `<div class="row"><input data-team-id="${t.id}" value="${t.name}" /><div class="score">${t.score}</div></div><button class="buzzBtn" data-team-id="${t.id}">Buzz</button>`
+        scoreboardEl.appendChild(div)
+      })
+      // wire events
+      scoreboardEl.querySelectorAll('input[data-team-id]').forEach(inp=>{
+        inp.addEventListener('input', e=>{
+          const id = Number(e.target.getAttribute('data-team-id'))
+          const team = teams.find(x=>x.id===id)
+          if(team) team.name = e.target.value
+          renderScoreboard()
+        })
+      })
+      scoreboardEl.querySelectorAll('.buzzBtn').forEach(btn=>{
+        btn.addEventListener('click', ()=>{
+          const id = Number(btn.getAttribute('data-team-id'))
+          onBuzz(id)
+        })
+      })
+    }
+
+    // YouTube player
+    let ytPlayer = null
+    function onYouTubeIframeAPIReady(){
+      const s = songs[currentIndex]
+      ytPlayer = new YT.Player('player', {
+        height: '240', width: '420', videoId: s ? s.youtubeId : '', playerVars: { start: s? s.startSec:0, controls:1, modestbranding:1, rel:0 }
+      })
+    }
+
+    // load YouTube API
+    (function loadYT(){
+      const tag = document.createElement('script')
+      tag.src = 'https://www.youtube.com/iframe_api'
+      document.body.appendChild(tag)
+    })()
+
+    // helper to play snippet given a song and duration
+    function playSnippet(song, duration){
+      if(!ytPlayer){
+        const wait = setInterval(()=>{ if(window.YT && window.YT.Player && ytPlayer) { clearInterval(wait); playSnippet(song,duration) } }, 200)
+        return
+      }
+      const start = song.startSec || 0
+      ytPlayer.loadVideoById({ videoId: song.youtubeId, startSeconds: start, suggestedQuality: 'large' })
+      setTimeout(()=>{ try{ ytPlayer.pauseVideo() }catch(e){} }, Math.max(0,duration*1000))
+    }
+
+    function seekTo(sec){ if(ytPlayer && ytPlayer.seekTo) ytPlayer.seekTo(sec, true) }
+    function play(){ if(ytPlayer && ytPlayer.playVideo) ytPlayer.playVideo() }
+    function pause(){ if(ytPlayer && ytPlayer.pauseVideo) ytPlayer.pauseVideo() }
+
+    // display current song info
+    function renderCurrentSong(){
+      const el = document.getElementById('songTitle')
+      const s = songs[currentIndex]
+      el.textContent = s ? `${s.title} — ${s.artist}` : '(no song loaded)'
+      if(ytPlayer && s) try{ ytPlayer.loadVideoById({ videoId: s.youtubeId, startSeconds: s.startSec }) }catch(e){}
+    }
+
+    // buzzer logic
+    function onBuzz(teamId){
+      if(buzzLocked) return
+      currentBuzzer = teamId
+      buzzLocked = true
+      playSound('buzz')
+      pause()
+      showAnswerModal()
+      highlightTeam(teamId)
+    }
+
+    function highlightTeam(teamId){
+      document.querySelectorAll('.team').forEach(div=>{
+        const inp = div.querySelector('input')
+        const id = Number(inp.getAttribute('data-team-id'))
+        div.style.background = id===teamId ? '#3b2f00' : '#111'
+      })
+    }
+    function clearHighlight(){ document.querySelectorAll('.team').forEach(div=>div.style.background='#111') }
+
+    // Answer modal
+    function showAnswerModal(){
+      const root = document.getElementById('modalRoot')
+      root.innerHTML = `<div class="modal"><div class="modalCard"><h3>Submit answer</h3><div style="display:flex;gap:8px;margin-top:8px"><input id="ansTitle" placeholder="Song title" style="flex:1;padding:8px;font-size:16px" /> <input id="ansArtist" placeholder="Artist" style="flex:1;padding:8px;font-size:16px" /></div><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px"><button id="ansCancel">Cancel</button><button id="ansCorrect">Mark Correct</button><button id="ansWrong">Mark Wrong</button></div></div></div>`
+      document.getElementById('ansCancel').onclick = ()=>{ closeModal(false) }
+      document.getElementById('ansCorrect').onclick = ()=>{ submitAnswer(true) }
+      document.getElementById('ansWrong').onclick = ()=>{ submitAnswer(false) }
+      setTimeout(()=>document.getElementById('ansTitle').focus(),50)
+    }
+    function closeModal(resume=true){ document.getElementById('modalRoot').innerHTML=''; if(resume){ play(); } if(!currentBuzzer){ clearHighlight() } }
+
+    function submitAnswer(markCorrect){
+      const title = document.getElementById('ansTitle').value || ''
+      const artist = document.getElementById('ansArtist').value || ''
+      const s = songs[currentIndex]
+      const strict = document.getElementById('strictChk').checked
+      const matched = checkAnswer(title, artist, s, strict)
+      const pts = determinePoints()
+      const correct = markCorrect
+      if((matched && correct) || (!matched && correct)){
+        const team = teams.find(t=>t.id===currentBuzzer)
+        if(team) team.score += pts
+        playSound('correct')
+      } else {
+        const team = teams.find(t=>t.id===currentBuzzer)
+        if(team) team.score -= pts
+        playSound('wrong')
+      }
+      currentBuzzer = null
+      buzzLocked = false
+      renderScoreboard()
+      closeModal(true)
+      clearHighlight()
+    }
+
+    // accept/reject quick buttons
+    document.getElementById('acceptBtn').addEventListener('click', ()=>{
+      if(!currentBuzzer){ playSound('start'); return }
+      const pts = determinePoints()
+      const team = teams.find(t=>t.id===currentBuzzer)
+      if(team) team.score += pts
+      playSound('correct')
+      currentBuzzer = null; buzzLocked=false; renderScoreboard(); play(); clearHighlight()
+    })
+    document.getElementById('rejectBtn').addEventListener('click', ()=>{
+      if(!currentBuzzer){ playSound('wrong'); return }
+      const pts = determinePoints()
+      const team = teams.find(t=>t.id===currentBuzzer)
+      if(team) team.score -= pts
+      playSound('wrong')
+      currentBuzzer = null; buzzLocked=false; renderScoreboard(); play(); clearHighlight()
+    })
+
+    document.getElementById('nextBtn').addEventListener('click', ()=>{ currentIndex = Math.min(currentIndex+1, songs.length-1); renderCurrentSong(); })
+
+    function determinePoints(){ const schedule=[10,20,30]; return schedule[currentIndex % schedule.length] }
+
+    // simple fuzzy matching
+    function normalize(s=''){ return (s||'').toLowerCase().replace(/[^a-z0-9]+/g,'').trim() }
+    function levenshtein(a,b){ if(a===b) return 0; const m=a.length, n=b.length; const dp=Array.from({length:m+1},()=>Array(n+1).fill(0)); for(let i=0;i<=m;i++) dp[i][0]=i; for(let j=0;j<=n;j++) dp[0][j]=j; for(let i=1;i<=m;i++) for(let j=1;j<=n;j++){ const cost=a[i-1]===b[j-1]?0:1; dp[i][j]=Math.min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+cost) } return dp[m][n] }
+    function checkAnswer(title, artist, song, strict){ const t=normalize(title); const a=normalize(artist); const st=normalize(song.title); const sa=normalize(song.artist); if(strict){ return levenshtein(t,st)<=2 && levenshtein(a,sa)<=3 } else { return levenshtein(t,st)<=3 } }
+
+    // Phase 2 bidding
+    document.getElementById('phase2Btn').addEventListener('click', ()=>{ startBidding() })
+    document.getElementById('phase1Btn').addEventListener('click', ()=>{ phase=1; bidState=null; document.getElementById('bidPanel').style.display='none'; document.getElementById('goldenPanel').style.display='none'; })
+    function startBidding(){
+      phase=2; const bidderIds = teams.map(t=>t.id); bidState = { currentBid:7, highestBidTeamId:null, bidders: bidderIds, turnIndex:0 }
+      document.getElementById('bidPanel').style.display='block'
+      renderBidders()
+      document.getElementById('currentBid').textContent = bidState.currentBid
+      playSound('start')
+    }
+
+    function renderBidders(){
+      const el = document.getElementById('bidders'); el.innerHTML=''
+      teams.forEach(t=>{
+        const btn = document.createElement('button'); btn.textContent = t.name + ' Bid'; btn.onclick = ()=>{ placeBid(t.id) }
+        el.appendChild(btn)
+      })
+    }
+    function placeBid(teamId){ if(!bidState) return; const turnId = bidState.bidders[bidState.turnIndex % bidState.bidders.length]; if(turnId !== teamId) return; if(bidState.currentBid <= 1) return; bidState.currentBid -= 1; bidState.highestBidTeamId = teamId; bidState.turnIndex += 1; document.getElementById('currentBid').textContent = bidState.currentBid; playSound('bid') }
+
+    document.getElementById('endBidBtn').addEventListener('click', ()=>{ endBiddingAndPlay() })
+    function endBiddingAndPlay(){ if(!bidState || !bidState.highestBidTeamId) return; const seconds = bidState.currentBid; const s = songs[currentIndex]; if(!s) return; playSnippet(s, seconds); buzzLocked=true; currentBuzzer = bidState.highestBidTeamId; document.getElementById('bidPanel').style.display='none'; bidState = null; playSound('start') }
+
+    // Phase 3 Golden Medley
+    document.getElementById('phase3Btn').addEventListener('click', ()=>{ startGolden() })
+    function startGolden(){ phase=3; const leader = teams.slice().sort((a,b)=>b.score-a.score)[0]; goldenState = { teamId: leader.id, secondsLeft:30, currentSongIdx:0, correctCount:0, expectedMax:7 }; document.getElementById('goldenPanel').style.display='block'; document.getElementById('goldenTeamName').textContent = leader.name; startGoldenTimer(); playSound('start') }
+
+    let goldenTimerInterval = null
+    function startGoldenTimer(){ if(goldenTimerInterval) clearInterval(goldenTimerInterval); document.getElementById('goldenTimer').textContent = goldenState.secondsLeft + 's'; goldenTimerInterval = setInterval(()=>{ goldenState.secondsLeft -= 1; document.getElementById('goldenTimer').textContent = goldenState.secondsLeft + 's'; if(goldenState.secondsLeft <= 0){ clearInterval(goldenTimerInterval); /* end golden */ } }, 1000) }
+
+    document.getElementById('goldenCorrect').addEventListener('click', ()=>{ goldenAdvance(true) })
+    document.getElementById('goldenWrong').addEventListener('click', ()=>{ goldenAdvance(false) })
+    function goldenAdvance(calledCorrect){ if(!goldenState) return; if(calledCorrect) { const t = teams.find(x=>x.id===goldenState.teamId); if(t) t.score += 10; goldenState.correctCount += 1; playSound('correct') } else { const t = teams.find(x=>x.id===goldenState.teamId); if(t) t.score -= 10; playSound('wrong') } currentIndex = Math.min(currentIndex+1, songs.length-1); renderCurrentSong(); renderScoreboard(); }
+
+    // fullscreen
+    document.getElementById('fullscreenBtn').addEventListener('click', ()=>{ if(document.documentElement.requestFullscreen) document.documentElement.requestFullscreen() })
+
+    // initial render
+    renderScoreboard(); renderCurrentSong();
+
+    // click-to-enable audio (some browsers require gesture)
+    document.body.addEventListener('click', function once(){ document.body.removeEventListener('click', once); try{ new (window.AudioContext||window.webkitAudioContext)() }catch(e){} })
+  </script>
+</body>
+</html>
