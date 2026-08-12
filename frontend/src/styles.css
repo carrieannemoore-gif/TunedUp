@@ -1,3 +1,5 @@
-/* simple styles */
+/* improved styles for buzzers and layout */
 body { margin:0; }
 button{ cursor:pointer }
+
+input { font-size:16px }
