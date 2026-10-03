@@ -1,0 +1,364 @@
+[
+  {
+    "name": "get_account",
+    "title": "Get crypto account",
+    "description": "Account number, status, and buying power of the Robinhood Crypto account.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "get_trading_pairs",
+    "title": "List trading pairs",
+    "description": "Supported trading pairs with min/max order size and price/quantity increments.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "symbols": {
+          "description": "Filter by pairs such as BTC-USD; omit for all",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "cursor": {
+          "description": "Pagination cursor from a previous response's `next` URL",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Maximum results per page",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "get_holdings",
+    "title": "Get crypto holdings",
+    "description": "Crypto holdings, including total quantity and quantity available for trading.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "asset_codes": {
+          "description": "Filter by asset codes such as BTC; omit for all",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "cursor": {
+          "description": "Pagination cursor from a previous response's `next` URL",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Maximum results per page",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "get_best_bid_ask",
+    "title": "Get best bid/ask",
+    "description": "Current best bid and ask, including Robinhood's spread, for one or more pairs.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "symbols": {
+          "description": "Pairs such as BTC-USD; omit for all",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "get_estimated_price",
+    "title": "Get estimated price",
+    "description": "Estimated execution price for the given quantities. Use side \"ask\" for buys and \"bid\" for sells.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Pair such as BTC-USD"
+        },
+        "side": {
+          "type": "string",
+          "enum": [
+            "bid",
+            "ask",
+            "both"
+          ]
+        },
+        "quantities": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?:0|[1-9]\\d*)(?:\\.\\d+)?$"
+          },
+          "description": "One or more asset quantities"
+        }
+      },
+      "required": [
+        "symbol",
+        "side",
+        "quantities"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "list_orders",
+    "title": "List orders",
+    "description": "Orders on the account, newest first, with optional filters. Filter by id to fetch one order.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "side": {
+          "type": "string",
+          "enum": [
+            "buy",
+            "sell"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "canceled",
+            "partially_filled",
+            "filled",
+            "failed"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "market",
+            "limit",
+            "stop_loss",
+            "stop_limit"
+          ]
+        },
+        "created_at_start": {
+          "description": "ISO 8601 timestamp",
+          "type": "string"
+        },
+        "created_at_end": {
+          "description": "ISO 8601 timestamp",
+          "type": "string"
+        },
+        "updated_at_start": {
+          "description": "ISO 8601 timestamp",
+          "type": "string"
+        },
+        "updated_at_end": {
+          "description": "ISO 8601 timestamp",
+          "type": "string"
+        },
+        "cursor": {
+          "description": "Pagination cursor from a previous response's `next` URL",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Maximum results per page",
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "place_order",
+    "title": "Place crypto order",
+    "description": "Places a REAL crypto order with real money. With confirm=false (the default) nothing is sent: it validates the order and returns a preview with the estimated USD notional. Show that preview to the user and only call again with confirm=true after they explicitly approve it. Orders above $50 estimated notional are refused, as are pairs other than BTC-USD.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Pair such as BTC-USD"
+        },
+        "side": {
+          "type": "string",
+          "enum": [
+            "buy",
+            "sell"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "market",
+            "limit",
+            "stop_loss",
+            "stop_limit"
+          ]
+        },
+        "asset_quantity": {
+          "description": "Amount of the asset. Exactly one of asset_quantity or quote_amount.",
+          "type": "string",
+          "pattern": "^(?:0|[1-9]\\d*)(?:\\.\\d+)?$"
+        },
+        "quote_amount": {
+          "description": "Amount in USD. Not allowed for market orders.",
+          "type": "string",
+          "pattern": "^(?:0|[1-9]\\d*)(?:\\.\\d+)?$"
+        },
+        "limit_price": {
+          "description": "Required for limit and stop_limit",
+          "type": "string",
+          "pattern": "^(?:0|[1-9]\\d*)(?:\\.\\d+)?$"
+        },
+        "stop_price": {
+          "description": "Required for stop_loss and stop_limit",
+          "type": "string",
+          "pattern": "^(?:0|[1-9]\\d*)(?:\\.\\d+)?$"
+        },
+        "time_in_force": {
+          "description": "Required for stop_loss and stop_limit; optional for limit",
+          "type": "string",
+          "enum": [
+            "gtc",
+            "gfd",
+            "gfw",
+            "gfm"
+          ]
+        },
+        "client_order_id": {
+          "description": "Idempotency key; generated if omitted. Reuse it when retrying.",
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "confirm": {
+          "default": false,
+          "description": "false = preview only; true = send the order",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "symbol",
+        "side",
+        "type"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "cancel_order",
+    "title": "Cancel crypto order",
+    "description": "Requests cancellation of an open order. Cancellation is not guaranteed if the order is already filling.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Robinhood order id (not client_order_id)"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  }
+]

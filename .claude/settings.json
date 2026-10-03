@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "ask": [
+      "mcp__robinhood-trading",
+      "mcp__robinhood-crypto"
+    ]
+  }
+}

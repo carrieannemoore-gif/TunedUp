@@ -1,0 +1,147 @@
+# Crypto agent configuration.
+# The risk engine enforces these limits on every order; Claude cannot override them.
+# Secrets (API keys) do NOT belong here -- put them in .env (see .env.example).
+
+limits:
+  # The agent's budget in USD: the most it may ever have invested. It works like a sub-account:
+  # allowance + realized profit/loss - money in its open positions, and never more than the account's
+  # real buying power. It is NEVER taken from your account balance. Live trading is refused while null.
+  allowance_usd: null
+
+  # Optional extra dollar ceiling on agent-held positions (market value); null = the allowance is the cap.
+  max_total_exposure_usd: null
+
+  # Percentages are of agent equity = the agent's available cash + its positions (marked at the bid),
+  # so they scale with the allowance. Set a percentage to 100 to effectively disable it.
+  max_order_pct: 25          # largest single order, as % of equity
+  min_order_usd: 1           # smaller orders are rejected
+  max_daily_loss_pct: 10     # loss in a UTC day (vs. equity at day start) -> no new buys until tomorrow
+  max_drawdown_pct: 30       # loss vs. starting equity -> agent halts until you run --reset-halt
+  max_trades_per_day: 6      # Claude-initiated trades; protective exits are always allowed
+  cooldown_minutes_per_symbol: 60
+  min_confidence: 0.6
+
+  # Stop-loss / take-profit bounds. Claude may choose within these; the code enforces them every cycle.
+  default_stop_loss_pct: 5
+  default_take_profit_pct: 10
+  min_stop_loss_pct: 1
+  max_stop_loss_pct: 15
+  min_take_profit_pct: 2
+  max_take_profit_pct: 50
+
+allowed_symbols:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+
+agent:
+  cycle_minutes: 15
+  candle_granularity_seconds: 3600   # hourly candles for indicators
+  candle_count: 200
+
+brain:
+  model: claude-opus-5-5
+  effort: high               # low | medium | high | xhigh | max
+  news_search: true          # let Claude use web search for recent news (max 3 searches per cycle)
+  max_searches_per_cycle: 3
+
+paper:
+  starting_cash_usd: 1000    # set this to the allowance you plan to fund, so paper results are comparable
+  slippage_pct: 0.5          # simulated spread/fee per side, so paper results aren't flattering
+
+# Which live broker to use when TRADING_MODE=live: mcp (an MCP trading server) or rest (direct API keys).
+# Paper mode always uses the simulator.
+live_broker: mcp
+
+mcp:
+  # Your own robinhood-crypto-mcp server, started by the agent over stdio.
+  # Build it first (npm install && npm run build) and put its absolute path below.
+  # Its keys come from .env (ROBINHOOD_API_KEY, ROBINHOOD_PRIVATE_KEY_BASE64, RH_MAX_ORDER_NOTIONAL_USD).
+  # The agent sets RH_ENABLE_TRADING (true only when trading live), RH_ALLOWED_SYMBOLS (= allowed_symbols)
+  # and RH_AUDIT_LOG (logs/mcp_server_audit.jsonl) itself.
+  transport: stdio
+  command: node
+  args: [/ABSOLUTE/PATH/TO/carrieannemoore-gif-robinhood-crypto-mcp/dist/index.js]
+  # extra_env: {RH_TIMEOUT_MS: "10000"}   # optional non-secret server settings
+
+  # For an HTTP server instead (e.g. Robinhood's own), use:
+  # transport: http
+  # url: https://agent.robinhood.com/mcp/trading
+  oauth_callback_port: 8765
+  allowed_auth_domains: [robinhood.com]   # HTTP logins anywhere else are refused (phishing guard)
+
+  order_fill_timeout_seconds: 30
+  # How the agent's operations map onto the server's tools. The agent never calls any tool not listed
+  # here (cancel_order is deliberately absent). `args` are templates; other fields are dotted paths into
+  # the tool's JSON result. Live startup checks every mapped call against the server's real schemas.
+  tools:
+    quote:
+      name: get_best_bid_ask
+      args: {symbols: ["{symbol}"]}
+      bid: results.0.bid_inclusive_of_sell_spread
+      ask: results.0.ask_inclusive_of_buy_spread
+    buying_power:
+      name: get_account
+      args: {}
+      value: buying_power
+    holdings:
+      name: get_holdings
+      args: {}
+      list: results
+      symbol: asset_code
+      qty: quantity_available_for_trading
+      next: next             # paginate: read the `cursor` parameter from the `next` URL
+      cursor_arg: cursor
+      max_pages: 20
+    pair_info:
+      name: get_trading_pairs
+      args: {symbols: ["{symbol}"]}
+      increment: results.0.asset_increment
+      min_size: results.0.min_order_size
+    place_order:
+      name: place_order
+      # confirm: true is required -- without it the server only previews and nothing is sent.
+      args: {symbol: "{symbol}", side: "{side}", type: market, asset_quantity: "{quantity}",
+             client_order_id: "{client_order_id}", confirm: true}
+      order_id: id
+      state: state
+      # Errors that mean the order may have gone through: always looked up below, whatever else they say.
+      unknown_patterns:
+        - "Order outcome UNKNOWN"
+      # Errors that prove the order never reached Robinhood. Anything else (timeouts, HTTP 5xx/408,
+      # network errors) is treated as "may have been sent" and the order is looked up below.
+      # The first two are the server's explicit outcome prefixes; the rest cover older server versions.
+      not_sent_patterns:
+        - "Order NOT sent: "
+        - "Order rejected by Robinhood, not executed: "
+        - "symbol must look like"
+        - "Specify exactly one of asset_quantity or quote_amount"
+        - "orders must use asset_quantity"
+        - "must be a positive decimal string"
+        - "orders require "
+        - "is not allowed for .* orders"
+        - "exceeds RH_MAX_ORDER_NOTIONAL_USD"
+        - "is not in RH_ALLOWED_SYMBOLS"
+        - "Could not get a market price"
+        - "Robinhood API returned HTTP 4(?!08)\\d\\d"
+        - "Input validation error"
+      reconcile:
+        name: list_orders
+        args: {symbol: "{symbol}", side: "{side}", created_at_start: "{since}"}
+        list: results
+        client_order_id: client_order_id
+        order_id: id
+        attempts: 3
+        wait_seconds: 2
+    get_order:
+      name: list_orders
+      args: {id: "{order_id}"}
+      state: results.0.state
+      filled_qty: results.0.filled_asset_quantity
+      avg_price: results.0.average_price
+  # Order states that mean "done". Anything else (open, partially_filled) is polled until the timeout.
+  filled_states: [filled]
+  failed_states: [canceled, cancelled, rejected, failed]
+  # Fallback quantity increments, used only if pair_info is not mapped.
+  asset_increments: {BTC-USD: "0.00000001", ETH-USD: "0.000001"}
+  default_asset_increment: "0.0001"

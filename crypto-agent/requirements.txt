@@ -1,0 +1,8 @@
+anthropic>=1.11.0
+pynacl>=1.5
+requests>=2.31
+python-dotenv>=1.0
+PyYAML>=6.0
+pydantic>=2.6
+mcp>=1.28
+pytest>=8.0
