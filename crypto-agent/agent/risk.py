@@ -36,9 +36,22 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
-def equity(ledger: Ledger, quotes: dict[str, Quote], buying_power: float) -> float:
-    """Agent equity: allowance cash plus agent-held positions marked at the bid."""
-    return buying_power + ledger.exposure(quotes)
+def agent_cash(lim: Limits, ledger: Ledger, broker_buying_power: float) -> float:
+    """Cash the agent may spend.
+
+    With an allowance, the agent runs a virtual sub-account: allowance + realized P&L - money tied up in
+    its open positions, and never more than the broker actually reports. Without an allowance (paper
+    mode only) it is simply the broker's buying power.
+    """
+    if lim.allowance_usd is None:
+        return max(0.0, broker_buying_power)
+    budget = lim.allowance_usd + ledger.state["realized_total"] - ledger.cost_basis()
+    return max(0.0, min(broker_buying_power, budget))
+
+
+def equity(ledger: Ledger, quotes: dict[str, Quote], cash: float) -> float:
+    """Agent equity: the agent's available cash plus agent-held positions marked at the bid."""
+    return cash + ledger.exposure(quotes)
 
 
 def max_order_usd(lim: Limits, equity_usd: float) -> float:

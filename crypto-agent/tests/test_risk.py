@@ -8,7 +8,7 @@ from agent.broker import Fill, PairInfo, Quote
 from agent.config import ConfigError, load_config
 from agent.ledger import Ledger
 from agent.models import Decision
-from agent.risk import RiskContext, evaluate, protective_exits
+from agent.risk import RiskContext, agent_cash, evaluate, protective_exits
 from conftest import NOW, ROOT
 
 PAIRS = {s: PairInfo(s, Decimal("0.00000001"), Decimal("0.00000001")) for s in ("BTC-USD", "ETH-USD", "SOL-USD")}
@@ -139,9 +139,65 @@ def test_config_rejects_percentages_over_100(tmp_path):
         load_config(env={"TRADING_MODE": "paper"}, root=tmp_path)
 
 
+def _live_config(tmp_path, allowance="2000", args="[node, /opt/rh/dist/index.js]"):
+    text = (ROOT / "config.yaml").read_text()
+    text = text.replace("allowance_usd: null", f"allowance_usd: {allowance}")
+    text = text.replace("args: [/ABSOLUTE/PATH/TO/carrieannemoore-gif-robinhood-crypto-mcp/dist/index.js]",
+                        f"args: {args}")
+    (tmp_path / "config.yaml").write_text(text)
+
+
+LIVE_ENV = {"TRADING_MODE": "live", "I_ACCEPT_LIVE_TRADING_RISK": "yes", "ROBINHOOD_API_KEY": "rh-api-x",
+            "ROBINHOOD_PRIVATE_KEY_BASE64": "c2VlZA==", "RH_MAX_ORDER_NOTIONAL_USD": "500"}
+
+
 def test_live_mode_requires_explicit_risk_acknowledgement(tmp_path):
-    (tmp_path / "config.yaml").write_text((ROOT / "config.yaml").read_text())
-    env = {"TRADING_MODE": "live"}  # MCP broker: no API keys needed, OAuth tokens instead
+    _live_config(tmp_path)
     with pytest.raises(ConfigError, match="I_ACCEPT_LIVE_TRADING_RISK"):
+        load_config(env={**LIVE_ENV, "I_ACCEPT_LIVE_TRADING_RISK": "no"}, root=tmp_path)
+    cfg = load_config(env=LIVE_ENV, root=tmp_path)
+    assert cfg.live and cfg.limits.allowance_usd == 2000
+    assert "rh-api-x" not in repr(cfg)  # server secrets are kept out of reprs and logs
+
+
+def test_live_mode_refuses_without_an_allowance(tmp_path):
+    _live_config(tmp_path, allowance="null")
+    with pytest.raises(ConfigError, match="allowance_usd"):
+        load_config(env=LIVE_ENV, root=tmp_path)
+
+
+@pytest.mark.parametrize("missing", ["ROBINHOOD_API_KEY", "RH_MAX_ORDER_NOTIONAL_USD"])
+def test_live_mcp_mode_refuses_without_server_keys_or_cap(tmp_path, missing):
+    _live_config(tmp_path)
+    env = {k: v for k, v in LIVE_ENV.items() if k != missing}
+    with pytest.raises(ConfigError, match=missing):
         load_config(env=env, root=tmp_path)
-    assert load_config(env={**env, "I_ACCEPT_LIVE_TRADING_RISK": "yes"}, root=tmp_path).live
+
+
+def test_live_mcp_mode_refuses_placeholder_server_path(tmp_path):
+    _live_config(tmp_path, args="[/ABSOLUTE/PATH/TO/x/dist/index.js]")
+    with pytest.raises(ConfigError, match="mcp.command"):
+        load_config(env=LIVE_ENV, root=tmp_path)
+
+
+def test_agent_cash_is_the_allowance_not_the_account(cfg, tmp_path):
+    lim = replace(cfg.limits, allowance_usd=1000)
+    ledger = Ledger(tmp_path / "l.json")
+    assert agent_cash(lim, ledger, 50_000) == 1000
+    assert agent_cash(lim, ledger, 400) == 400  # never more than the account really has
+    ledger.apply_fill(Fill("ETH-USD", "buy", 0.1, 3000, "o", "c"), NOW)  # $300 tied up
+    assert agent_cash(lim, ledger, 50_000) == pytest.approx(700)
+    ledger.apply_fill(Fill("ETH-USD", "sell", 0.1, 2000, "o2", "c2"), NOW)  # sold at a $100 loss
+    assert agent_cash(lim, ledger, 50_000) == pytest.approx(900)  # losses shrink the budget
+    assert agent_cash(replace(cfg.limits, allowance_usd=None), ledger, 50_000) == 50_000  # paper fallback
+
+
+def test_buys_sized_from_allowance_even_with_a_huge_account(cfg, tmp_path):
+    lim = replace(cfg.limits, allowance_usd=1000)
+    ledger = Ledger(tmp_path / "l.json")
+    cash = agent_cash(lim, ledger, 250_000)
+    ledger.roll_day(NOW, QUOTES, cash)
+    c = RiskContext(lim, cfg.allowed_symbols, QUOTES, PAIRS, ledger, cash, NOW)
+    intents = evaluate([d(s, usd=100_000) for s in cfg.allowed_symbols], c)
+    assert all(i.est_usd <= 250 + 1e-6 for i in intents)  # 25% of the $1,000 allowance
+    assert sum(i.est_usd for i in intents) <= 1000 + 1e-6

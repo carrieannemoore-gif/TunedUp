@@ -1,13 +1,14 @@
-"""Broker backed by the Robinhood Trading MCP server.
+"""Broker backed by an MCP trading server (your robinhood-crypto-mcp over stdio, or an HTTP server).
 
 The agent's own code is the MCP client. Claude never sees or calls these tools: it only proposes
 decisions, and this broker places an order only after the risk engine has approved it.
 
 Safety properties:
-- Only the five tools mapped in config.yaml (mcp.tools) can ever be called. Transfers,
+- Only the tools mapped in config.yaml (mcp.tools) can ever be called. Cancels, transfers,
   withdrawals or any other server tool are unreachable from this code.
-- Order placement is never retried. If we cannot tell whether an order executed, we raise
-  OrderStateUnknown and the agent halts until a human checks the Robinhood app.
+- Order placement is never retried. When a failure could mean the order was sent, we look the
+  order up by client_order_id; if it can't be found we raise OrderStateUnknown and the agent
+  halts until a human checks the Robinhood app.
 - If the session is down BEFORE an order is sent, the order is reported as not sent (rejected).
 """
 
@@ -20,16 +21,18 @@ import re
 import threading
 import time
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable, Iterable
+from urllib.parse import parse_qs, urlparse
 
 from mcp import ClientSession
 
 from .broker import Fill, OrderRejected, OrderStateUnknown, PairInfo, Quote
 
 OPERATIONS = ("quote", "buying_power", "holdings", "place_order", "get_order")
+OPTIONAL_OPERATIONS = ("pair_info",)
 UNMAPPED = "TBD"
 _PLACEHOLDER = re.compile(r"^\{(\w+)\}$")
 
@@ -50,8 +53,37 @@ class ToolError(RuntimeError):
 
 # --- mapping helpers --------------------------------------------------------------------------
 
-def mapping_problems(tools_cfg: dict, discovered: set[str] | None = None) -> list[str]:
-    """Everything that must be fixed before the MCP broker may trade live."""
+def _mapped_tools(tools_cfg: dict) -> dict[str, dict]:
+    """Every tool call the mapping can make, keyed by a label (op, or op.reconcile)."""
+    out = {}
+    for op in OPERATIONS + OPTIONAL_OPERATIONS:
+        entry = tools_cfg.get(op)
+        if isinstance(entry, dict) and entry.get("name") and entry["name"] != UNMAPPED:
+            out[op] = entry
+    reconcile = (tools_cfg.get("place_order") or {}).get("reconcile")
+    if isinstance(reconcile, dict) and reconcile.get("name"):
+        out["place_order.reconcile"] = reconcile
+    return out
+
+
+def _arg_problems(label: str, entry: dict, tool: dict) -> list[str]:
+    schema = tool.get("inputSchema") or {}
+    props = schema.get("properties") or {}
+    args = entry.get("args") or {}
+    problems = [f"mcp.tools.{label}.args.{k} is not a parameter of {entry['name']}" for k in args if k not in props]
+    problems += [f"mcp.tools.{label}.args is missing required parameter {r!r} of {entry['name']}"
+                 for r in schema.get("required") or [] if r not in args]
+    if label == "place_order" and "confirm" in props and args.get("confirm") is not True:
+        problems.append("mcp.tools.place_order.args must set confirm: true, otherwise orders are only previewed")
+    return problems
+
+
+def mapping_problems(tools_cfg: dict, discovered: Iterable[str] | list[dict] | None = None) -> list[str]:
+    """Everything that must be fixed before the MCP broker may trade live.
+
+    `discovered` is the server's tool list: names only, or full tool definitions (then every mapped
+    call's arguments are also checked against that tool's input schema).
+    """
     problems = []
     for op in OPERATIONS:
         entry = tools_cfg.get(op)
@@ -59,8 +91,16 @@ def mapping_problems(tools_cfg: dict, discovered: set[str] | None = None) -> lis
             problems.append(f"mcp.tools.{op} is missing")
         elif entry["name"] == UNMAPPED:
             problems.append(f"mcp.tools.{op}.name is still TBD")
-        elif discovered is not None and entry["name"] not in discovered:
-            problems.append(f"mcp.tools.{op}.name={entry['name']!r} is not offered by the server")
+    if discovered is None or problems:
+        return problems
+    discovered = list(discovered)
+    defs = {t["name"]: t for t in discovered if isinstance(t, dict)}
+    names = set(defs) or set(discovered)
+    for label, entry in _mapped_tools(tools_cfg).items():
+        if entry["name"] not in names:
+            problems.append(f"mcp.tools.{label}.name={entry['name']!r} is not offered by the server")
+        elif entry["name"] in defs:
+            problems += _arg_problems(label, entry, defs[entry["name"]])
     return problems
 
 
@@ -176,7 +216,8 @@ class _SessionRunner:
 class RobinhoodMCPBroker:
     def __init__(self, mcp_cfg: dict, session_factory: SessionFactory, call_timeout_s: float = 30.0):
         self._tools: dict = mcp_cfg.get("tools") or {}
-        self._allowed_names = {self._tools[op]["name"] for op in OPERATIONS if op in self._tools}
+        self._allowed_names = {e["name"] for e in _mapped_tools(self._tools).values()}
+        self._pairs: dict[str, PairInfo] = {}
         self._filled = {s.lower() for s in mcp_cfg.get("filled_states", ["filled"])}
         self._failed = {s.lower() for s in mcp_cfg.get("failed_states", ["canceled", "cancelled", "rejected", "failed"])}
         self._fill_timeout_s = float(mcp_cfg.get("order_fill_timeout_seconds", 30))
@@ -214,14 +255,15 @@ class RobinhoodMCPBroker:
 
     # raw tool access, restricted to the mapped tools
 
-    def _call(self, op: str, **params: Any) -> Any:
-        entry = self._tools.get(op)
+    def _call_entry(self, label: str, entry: dict | None, extra_args: dict | None = None, **params: Any) -> Any:
         if not entry or entry.get("name") in (None, UNMAPPED):
-            raise MCPMappingError(f"mcp.tools.{op} is not mapped; run --discover and finish config.yaml")
+            raise MCPMappingError(f"mcp.tools.{label} is not mapped; run --discover and finish config.yaml")
         name = entry["name"]
         if name not in self._allowed_names:  # defensive: only mapped tools are callable
             raise MCPMappingError(f"tool {name!r} is not in the allow-list")
         args = fill_template(entry.get("args") or {}, params)
+        if extra_args:
+            args = {**args, **extra_args}
         self.connect()
 
         async def _invoke(session: ClientSession) -> Any:
@@ -231,6 +273,9 @@ class RobinhoodMCPBroker:
         if result.isError:
             raise ToolError(f"{name} failed: {_error_text(result)}")
         return result_payload(result)
+
+    def _call(self, op: str, extra_args: dict | None = None, **params: Any) -> Any:
+        return self._call_entry(op, self._tools.get(op), extra_args, **params)
 
     # Broker protocol
 
@@ -247,18 +292,34 @@ class RobinhoodMCPBroker:
 
     def holdings(self) -> dict[str, float]:
         spec = self._tools["holdings"]
-        rows = dig(self._call("holdings"), spec.get("list"))
         out: dict[str, float] = {}
-        for row in rows or []:
-            sym = str(dig(row, spec.get("symbol"))).upper()
-            if not sym.endswith("-USD"):
-                sym = f"{sym}-USD"
-            out[sym] = out.get(sym, 0.0) + float(dig(row, spec.get("qty")))
-        return out
+        extra: dict | None = None
+        for _ in range(int(spec.get("max_pages", 20))):
+            data = self._call("holdings", extra)
+            for row in dig(data, spec.get("list")) or []:
+                sym = str(dig(row, spec.get("symbol"))).upper()
+                if not sym.endswith("-USD"):
+                    sym = f"{sym}-USD"
+                out[sym] = out.get(sym, 0.0) + float(dig(row, spec.get("qty")))
+            cursor = _next_cursor(data, spec)
+            if not cursor:
+                return out
+            extra = {spec.get("cursor_arg", "cursor"): cursor}
+        raise RuntimeError("holdings pagination did not finish; raise mcp.tools.holdings.max_pages")
 
     def pair_info(self, symbol: str) -> PairInfo:
-        inc = self._increments.get(symbol, self._default_increment)
-        return PairInfo(symbol=symbol, asset_increment=inc, min_order_size=inc)
+        if symbol in self._pairs:
+            return self._pairs[symbol]
+        spec = self._tools.get("pair_info")
+        if spec and spec.get("name") not in (None, UNMAPPED):
+            data = self._call("pair_info", symbol=symbol)
+            info = PairInfo(symbol=symbol, asset_increment=Decimal(str(dig(data, spec.get("increment")))),
+                            min_order_size=Decimal(str(dig(data, spec.get("min_size")))))
+        else:
+            inc = self._increments.get(symbol, self._default_increment)
+            info = PairInfo(symbol=symbol, asset_increment=inc, min_order_size=inc)
+        self._pairs[symbol] = info
+        return info
 
     def market_order(self, symbol: str, side: str, asset_quantity: Decimal, client_order_id: str) -> Fill:
         try:
@@ -268,34 +329,70 @@ class RobinhoodMCPBroker:
         spec = self._tools["place_order"]
         params = {"symbol": symbol, "side": side, "quantity": format(asset_quantity, "f"),
                   "client_order_id": client_order_id}
+        submitted_at = datetime.now(timezone.utc)
         try:
             data = self._call("place_order", **params)
         except (MCPMappingError, SessionNotConnected) as e:
             raise OrderRejected(f"order not sent: {e}") from e
-        except ToolError as e:  # the server answered and refused the order
-            raise OrderRejected(str(e)) from e
-        except Exception as e:  # timeout / transport failure after sending: outcome unknown
-            raise OrderStateUnknown(f"order {client_order_id} outcome unknown: {e!r}") from e
+        except ToolError as e:
+            if self._definitely_not_sent(str(e)):
+                raise OrderRejected(str(e)) from e
+            order_id = self._reconcile(symbol, side, client_order_id, submitted_at, cause=e)
+            return self._await_fill(order_id, None, symbol, side, client_order_id)
+        except Exception as e:  # timeout / transport failure after sending: look the order up
+            order_id = self._reconcile(symbol, side, client_order_id, submitted_at, cause=e)
+            return self._await_fill(order_id, None, symbol, side, client_order_id)
 
         try:
             order_id = str(dig(data, spec.get("order_id")))
-        except (KeyError, IndexError, ValueError) as e:
-            raise OrderStateUnknown(f"order {client_order_id} accepted but no order id in response") from e
-        state_data = data
+        except (KeyError, IndexError, ValueError, TypeError) as e:
+            raise OrderStateUnknown(f"order {client_order_id}: response has no order id (preview only?): "
+                                    f"{json.dumps(data)[:300]}") from e
+        return self._await_fill(order_id, data, symbol, side, client_order_id)
+
+    def _definitely_not_sent(self, message: str) -> bool:
+        """True only for errors that prove the order never reached Robinhood (validation, caps, 4xx)."""
+        patterns = (self._tools.get("place_order") or {}).get("not_sent_patterns") or []
+        return any(re.search(p, message) for p in patterns)
+
+    def _reconcile(self, symbol: str, side: str, client_order_id: str, submitted_at: datetime,
+                   cause: BaseException) -> str:
+        """After an ambiguous failure, find our order by client_order_id. Never re-sends anything."""
+        spec = (self._tools.get("place_order") or {}).get("reconcile")
+        if not spec:
+            raise OrderStateUnknown(f"order {client_order_id} outcome unknown ({cause!r}); no reconcile tool mapped")
+        since = (submitted_at - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        last_error: BaseException = cause
+        for attempt in range(int(spec.get("attempts", 3))):
+            if attempt:
+                time.sleep(float(spec.get("wait_seconds", 2)))
+            try:
+                data = self._call_entry("place_order.reconcile", spec, symbol=symbol, side=side, since=since)
+                for order in dig(data, spec.get("list")) or []:
+                    if str(dig(order, spec.get("client_order_id"))) == client_order_id:
+                        return str(dig(order, spec.get("order_id", "id")))
+            except Exception as e:  # noqa: BLE001 - keep trying, then give up safely
+                last_error = e
+        raise OrderStateUnknown(f"order {client_order_id} outcome unknown after {cause!r}; "
+                                f"not found by client_order_id (last: {last_error!r})")
+
+    def _await_fill(self, order_id: str, place_data: Any, symbol: str, side: str, client_order_id: str) -> Fill:
+        place_spec, get_spec = self._tools["place_order"], self._tools["get_order"]
+        if place_data is not None:
+            state = str(dig(place_data, place_spec.get("state"))).lower()
+            if state in self._failed:
+                raise OrderRejected(f"order {order_id} ended in state {state}")
         deadline = time.time() + self._fill_timeout_s
-        get_spec = self._tools["get_order"]
         while True:
-            state = str(dig(state_data, spec.get("state") if state_data is data else get_spec.get("state"))).lower()
+            data = self._safe_get_order(order_id, client_order_id)
+            state = str(dig(data, get_spec.get("state"))).lower()
             if state in self._filled:
-                if state_data is data:  # place_order may not carry fill details; fetch them
-                    state_data = self._safe_get_order(order_id, client_order_id)
-                return self._to_fill(state_data, symbol, side, order_id, client_order_id)
+                return self._to_fill(data, symbol, side, order_id, client_order_id)
             if state in self._failed:
                 raise OrderRejected(f"order {order_id} ended in state {state}")
             if time.time() > deadline:
                 raise OrderStateUnknown(f"order {order_id} not filled within {self._fill_timeout_s}s (state={state})")
             time.sleep(1.5)
-            state_data = self._safe_get_order(order_id, client_order_id)
 
     def _safe_get_order(self, order_id: str, client_order_id: str) -> Any:
         try:
@@ -316,6 +413,18 @@ class RobinhoodMCPBroker:
                     client_order_id=client_order_id)
 
 
+def _next_cursor(data: Any, spec: dict) -> str | None:
+    """Pull the pagination cursor out of a response's `next` URL, if there is another page."""
+    try:
+        nxt = dig(data, spec.get("next", "next"))
+    except (KeyError, IndexError):
+        return None
+    if not nxt:
+        return None
+    values = parse_qs(urlparse(str(nxt)).query).get(spec.get("cursor_param", "cursor"))
+    return values[0] if values else None
+
+
 # --- production session factory -----------------------------------------------------------------
 
 def http_session_factory(mcp_cfg: dict, state_dir: Path, interactive: bool) -> SessionFactory:
@@ -334,5 +443,37 @@ def http_session_factory(mcp_cfg: dict, state_dir: Path, interactive: bool) -> S
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 yield session
+
+    return factory
+
+
+def stdio_session_factory(mcp_cfg: dict, server_env: dict[str, str], allowed_symbols: Iterable[str],
+                          log_dir: Path, trading_enabled: bool) -> SessionFactory:
+    """Start your own MCP server (e.g. robinhood-crypto-mcp) as a child process over stdio.
+
+    The child gets only a minimal environment (HOME, PATH, SHELL, TERM) plus the variables set here,
+    so unrelated secrets such as ANTHROPIC_API_KEY never reach it. Trading tools are only enabled
+    when the agent is trading live; the server's symbol allowlist is set from the agent's own.
+    """
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+    env = {  # later entries win: the agent's own switches can't be overridden from config
+        **{str(k): str(v) for k, v in (mcp_cfg.get("extra_env") or {}).items()},
+        **server_env,
+        "RH_ENABLE_TRADING": "true" if trading_enabled else "false",
+        "RH_ALLOWED_SYMBOLS": ",".join(allowed_symbols),
+        "RH_AUDIT_LOG": str(log_dir / "mcp_server_audit.jsonl"),
+    }
+    params = StdioServerParameters(command=str(mcp_cfg["command"]), args=[str(a) for a in mcp_cfg.get("args") or []],
+                                   env=env, cwd=mcp_cfg.get("cwd"))
+
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[ClientSession]:
+        with (log_dir / "mcp_server_stderr.log").open("a") as errlog:
+            async with stdio_client(params, errlog=errlog) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    yield session
 
     return factory

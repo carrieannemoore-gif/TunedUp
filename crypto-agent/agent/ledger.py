@@ -50,6 +50,10 @@ class Ledger:
     def qty(self, symbol: str) -> float:
         return float(self.positions.get(symbol, {}).get("qty", 0.0))
 
+    def cost_basis(self) -> float:
+        """Dollars currently tied up in agent positions, at what the agent paid."""
+        return sum(p["qty"] * p["avg_cost"] for p in self.positions.values())
+
     def exposure(self, quotes: dict[str, Quote]) -> float:
         return sum(p["qty"] * quotes[s].bid for s, p in self.positions.items() if s in quotes)
 
