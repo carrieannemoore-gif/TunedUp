@@ -105,9 +105,15 @@ mcp:
              client_order_id: "{client_order_id}", confirm: true}
       order_id: id
       state: state
+      # Errors that mean the order may have gone through: always looked up below, whatever else they say.
+      unknown_patterns:
+        - "Order outcome UNKNOWN"
       # Errors that prove the order never reached Robinhood. Anything else (timeouts, HTTP 5xx/408,
       # network errors) is treated as "may have been sent" and the order is looked up below.
+      # The first two are the server's explicit outcome prefixes; the rest cover older server versions.
       not_sent_patterns:
+        - "Order NOT sent: "
+        - "Order rejected by Robinhood, not executed: "
         - "symbol must look like"
         - "Specify exactly one of asset_quantity or quote_amount"
         - "orders must use asset_quantity"

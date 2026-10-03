@@ -58,7 +58,11 @@ Requires Python 3.11+ and Node 20+.
 
 **A decision you've made, recorded here.** Your server's README advises keeping a person-approves-each-order prompt on `place_order`. Running this agent autonomously replaces that prompt with the agent's risk engine plus the server's cap and allowlist. That was your choice. If you'd rather approve trades yourself, use the server from Claude Code instead. This repo's `.claude/settings.json` makes Claude Code ask before every `robinhood-crypto` and `robinhood-trading` tool call.
 
-**One server behavior to know about.** Before sending an order, your server fetches a price estimate from Robinhood. If that lookup fails with a server or network error, the error looks the same as a failed send. The agent can't tell the two apart, so it searches for the order. When it doesn't find one, it halts as a precaution. Check the app, then run `--reset-halt`.
+**How the agent reads your server's errors.** From the `claude/order-outcome-errors` change onward, every `place_order` error from your server starts with one of three prefixes:
+- `Order NOT sent:` and `Order rejected by Robinhood, not executed:` are clean refusals, and the agent moves on.
+- `Order outcome UNKNOWN` always makes the agent look the order up by `client_order_id`. If it can't find the order, it halts.
+
+Your server also checks the coin allowlist before any network call. With an older build, a failed price estimate looks the same as a failed send, so the agent halts as a precaution. If that happens, check the app, then run `--reset-halt`.
 
 **To use Robinhood's own MCP server instead:** set `mcp.transport: http` and `mcp.url`, run `--login`, then `--discover`, and update `mcp.tools` to match its tools.
 

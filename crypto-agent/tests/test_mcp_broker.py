@@ -112,6 +112,11 @@ class FakeRobinhoodCryptoMCP:
                 raise ValueError("Robinhood API returned HTTP 503: upstream timeout")
             if mode == "timeout_not_sent":
                 raise ValueError("The operation was aborted due to timeout")
+            if mode == "prefixed_not_sent":  # newer server: estimate failed before the order request
+                raise ValueError("Order NOT sent: Robinhood API returned HTTP 503: {}")
+            if mode == "prefixed_unknown":  # an explicit unknown marker wins over any other pattern
+                raise ValueError("Order outcome UNKNOWN, it may have been executed (client_order_id x; check "
+                                 "list_orders): Robinhood API returned HTTP 400 is not in RH_ALLOWED_SYMBOLS")
             if mode == "hang":
                 await asyncio.sleep(5)
             if not confirm:
@@ -201,7 +206,7 @@ def test_market_order_confirms_and_fills(broker, fake):
     assert fake.orders["ord-1"]["client_order_id"] == "11111111-1111-4111-8111-111111111111"
 
 
-@pytest.mark.parametrize("mode", ["cap", "http400"])
+@pytest.mark.parametrize("mode", ["cap", "http400", "prefixed_not_sent"])
 def test_errors_that_prove_nothing_was_sent_are_clean_rejections(fake, mode):
     fake.order_mode = mode
     b = make_broker(fake)
@@ -231,6 +236,17 @@ def test_ambiguous_failure_with_no_order_found_halts(fake):
         with pytest.raises(OrderStateUnknown, match="not found by client_order_id"):
             b.market_order("SOL-USD", "buy", Decimal("1"), "c-t")
         assert fake.calls.count("place_order") == 1 and fake.calls.count("list_orders") == 3
+    finally:
+        b.close()
+
+
+def test_explicit_unknown_marker_always_triggers_a_lookup(fake):
+    fake.order_mode = "prefixed_unknown"
+    b = make_broker(fake)
+    try:
+        with pytest.raises(OrderStateUnknown):
+            b.market_order("SOL-USD", "buy", Decimal("1"), "c-u")
+        assert fake.calls.count("list_orders") == 3 and fake.calls.count("place_order") == 1
     finally:
         b.close()
 

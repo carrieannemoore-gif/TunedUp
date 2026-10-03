@@ -351,9 +351,13 @@ class RobinhoodMCPBroker:
         return self._await_fill(order_id, data, symbol, side, client_order_id)
 
     def _definitely_not_sent(self, message: str) -> bool:
-        """True only for errors that prove the order never reached Robinhood (validation, caps, 4xx)."""
-        patterns = (self._tools.get("place_order") or {}).get("not_sent_patterns") or []
-        return any(re.search(p, message) for p in patterns)
+        """True only for errors that prove the order never reached Robinhood (validation, caps, 4xx).
+
+        An explicit "outcome unknown" marker always wins, so the order is looked up instead."""
+        spec = self._tools.get("place_order") or {}
+        if any(re.search(p, message) for p in spec.get("unknown_patterns") or []):
+            return False
+        return any(re.search(p, message) for p in spec.get("not_sent_patterns") or [])
 
     def _reconcile(self, symbol: str, side: str, client_order_id: str, submitted_at: datetime,
                    cause: BaseException) -> str:

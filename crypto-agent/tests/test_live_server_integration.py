@@ -88,18 +88,37 @@ def test_real_server_places_confirmed_orders_and_enforces_its_own_limits(tmp_pat
     assert any(json.loads(line).get("phase") == "submit" for line in audit)
 
 
-def test_ambiguous_server_error_halts_even_if_nothing_was_sent(tmp_path, env):
-    """The server fetches a price estimate before sending; a 5xx there looks identical to a failed send.
-    The agent can't tell them apart, so it looks the order up, doesn't find it, and halts (safe side)."""
+def _reports_outcomes(broker) -> bool:
+    """Newer servers prefix place_order errors with whether the order was sent."""
+    place = next(t for t in broker.list_tools() if t["name"] == "place_order")
+    return "Order NOT sent" in place.get("description", "")
+
+
+def test_failed_price_estimate_before_sending(tmp_path, env):
+    """The server fetches a price estimate before the order request. A newer server says the order was
+    not sent, so the agent moves on; an older one can't say, so the agent halts to be safe."""
     mock, secrets = env
     mock.fail_estimates = True
     b, _ = _broker(tmp_path, mock, secrets)
     try:
-        with pytest.raises(OrderStateUnknown):
+        expected = OrderRejected if _reports_outcomes(b) else OrderStateUnknown
+        with pytest.raises(expected):
             b.market_order("ETH-USD", "buy", Decimal("0.01"), "66666666-6666-4666-8666-666666666666")
     finally:
         b.close()
     assert mock.posts == []
+
+
+def test_order_request_lost_and_not_found_halts(tmp_path, env):
+    mock, secrets = env
+    mock.fail_next_post_before_recording = True
+    b, _ = _broker(tmp_path, mock, secrets)
+    try:
+        with pytest.raises(OrderStateUnknown, match="not found by client_order_id"):
+            b.market_order("ETH-USD", "buy", Decimal("0.01"), "77777777-7777-4777-8777-777777777777")
+    finally:
+        b.close()
+    assert len(mock.posts) == 1 and mock.orders == {}  # sent once, never re-sent
 
 
 def test_trading_tools_absent_unless_live(tmp_path, env):

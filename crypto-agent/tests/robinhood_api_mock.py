@@ -29,6 +29,7 @@ class MockRobinhood:
         self.bad_signatures = 0
         self.fail_next_post_after_recording = False
         self.fail_estimates = False
+        self.fail_next_post_before_recording = False
         mock = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -98,6 +99,9 @@ class MockRobinhood:
                     return self._send(404, {"detail": "no mock"})
                 order = json.loads(body)
                 mock.posts.append(order)
+                if mock.fail_next_post_before_recording:  # the request died; Robinhood never took it
+                    mock.fail_next_post_before_recording = False
+                    return self._send(503, {"detail": "unavailable"})
                 qty = float(order["market_order_config"]["asset_quantity"])
                 price = PRICES[order["symbol"]] * (1.001 if order["side"] == "buy" else 0.999)
                 if order["side"] == "buy" and qty * price > mock.buying_power:
