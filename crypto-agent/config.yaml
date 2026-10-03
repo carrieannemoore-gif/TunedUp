@@ -1,0 +1,94 @@
+# Crypto agent configuration.
+# The risk engine enforces these limits on every order; Claude cannot override them.
+# Secrets (API keys) do NOT belong here -- put them in .env (see .env.example).
+
+limits:
+  # Your Robinhood allowance (the agent's buying power) is the capital ceiling.
+  # Optional extra dollar ceiling on agent-held positions; null = bounded only by the allowance.
+  max_total_exposure_usd: null
+
+  # Percentages are of agent equity = allowance cash + agent-held positions (marked at the bid),
+  # so they scale with whatever allowance you fund. Set a percentage to 100 to effectively disable it.
+  max_order_pct: 25          # largest single order, as % of equity
+  min_order_usd: 1           # smaller orders are rejected
+  max_daily_loss_pct: 10     # loss in a UTC day (vs. equity at day start) -> no new buys until tomorrow
+  max_drawdown_pct: 30       # loss vs. starting equity -> agent halts until you run --reset-halt
+  max_trades_per_day: 6      # Claude-initiated trades; protective exits are always allowed
+  cooldown_minutes_per_symbol: 60
+  min_confidence: 0.6
+
+  # Stop-loss / take-profit bounds. Claude may choose within these; the code enforces them every cycle.
+  default_stop_loss_pct: 5
+  default_take_profit_pct: 10
+  min_stop_loss_pct: 1
+  max_stop_loss_pct: 15
+  min_take_profit_pct: 2
+  max_take_profit_pct: 50
+
+allowed_symbols:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+
+agent:
+  cycle_minutes: 15
+  candle_granularity_seconds: 3600   # hourly candles for indicators
+  candle_count: 200
+
+brain:
+  model: claude-opus-5-5
+  effort: high               # low | medium | high | xhigh | max
+  news_search: true          # let Claude use web search for recent news (max 3 searches per cycle)
+  max_searches_per_cycle: 3
+
+paper:
+  starting_cash_usd: 1000    # set this to the allowance you plan to fund, so paper results are comparable
+  slippage_pct: 0.5          # simulated spread/fee per side, so paper results aren't flattering
+
+# Which live broker to use when TRADING_MODE=live: mcp (Robinhood Trading MCP) or rest (Crypto Trading API keys).
+# Paper mode always uses the simulator.
+live_broker: mcp
+
+mcp:
+  url: https://agent.robinhood.com/mcp/trading
+  oauth_callback_port: 8765
+  allowed_auth_domains: [robinhood.com]   # login pages anywhere else are refused (phishing guard)
+  order_fill_timeout_seconds: 30
+  # Map the agent's five broker operations to the server's tools.
+  # Run `python -m agent.main --discover` to list the real tool names and schemas, then replace every TBD.
+  # The agent refuses to trade live while any name is TBD, and it never calls a tool that is not listed here.
+  #   args:    argument template; "{symbol}", "{side}", "{quantity}", "{client_order_id}", "{order_id}" are filled in
+  #   others:  dotted paths into the tool's JSON result
+  tools:
+    quote:
+      name: TBD
+      args: {symbol: "{symbol}"}
+      bid: bid_price
+      ask: ask_price
+    buying_power:
+      name: TBD
+      args: {}
+      value: buying_power
+    holdings:
+      name: TBD
+      args: {}
+      list: holdings
+      symbol: symbol
+      qty: quantity
+    place_order:
+      name: TBD
+      args: {symbol: "{symbol}", side: "{side}", type: market, quantity: "{quantity}", client_order_id: "{client_order_id}"}
+      order_id: id
+      state: state
+    get_order:
+      name: TBD
+      args: {order_id: "{order_id}"}
+      state: state
+      filled_qty: filled_quantity
+      avg_price: average_price
+  # Order states that mean "done". Anything else is polled until order_fill_timeout_seconds.
+  filled_states: [filled]
+  failed_states: [canceled, cancelled, rejected, failed]
+  # Quantity increments used to round orders DOWN when the server does not report them.
+  asset_increments: {BTC-USD: "0.00000001", ETH-USD: "0.000001"}
+  default_asset_increment: "0.0001"
